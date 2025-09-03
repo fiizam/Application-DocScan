@@ -1,10 +1,13 @@
+// ignore_for_file: unused_import
+
 import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'dart:io';
-import 'dart:math';
+import 'dart:math' as math; // Tambahkan import ini
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 
-// A screen for a live camera feed with a custom frame overlay.
 class CameraScanScreen extends StatefulWidget {
   const CameraScanScreen({super.key});
 
@@ -17,41 +20,137 @@ class _CameraScanScreenState extends State<CameraScanScreen> {
   bool _isInitializing = true;
   bool _isTaking = false;
   List<CameraDescription>? _cameras;
-
-  // New UI controls for the overlay
   bool _showGuides = true;
-  double _frameScale = 0.85; // This value determines the size of the frame.
+  double _frameScale = 0.85;
+  bool _isFlashOn = false;
 
   @override
   void initState() {
     super.initState();
-    _initCamera();
+    _checkPermissionAndInitCamera();
   }
 
-  // Initializes the camera controller.
+  Future<void> _checkPermissionAndInitCamera() async {
+    final cameraStatus = await Permission.camera.request();
+    if (cameraStatus.isGranted) {
+      await _initCamera();
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Izin kamera diperlukan untuk scan dokumen')),
+        );
+      }
+    }
+  }
+
   Future<void> _initCamera() async {
     try {
-      // Ensure cameras are available before proceeding.
       _cameras = await availableCameras();
       if (_cameras!.isEmpty) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Tidak ada kamera tersedia.')));
+            const SnackBar(content: Text('Tidak ada kamera tersedia')),
+          );
         }
         return;
       }
+
       final back = _cameras!.firstWhere(
-        (c) => c.lensDirection == CameraLensDirection.back,
+        (camera) => camera.lensDirection == CameraLensDirection.back,
         orElse: () => _cameras!.first,
       );
-      _controller = CameraController(back, ResolutionPreset.high, enableAudio: false);
+
+      _controller = CameraController(
+        back,
+        ResolutionPreset.high,
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.jpeg,
+      );
+
       await _controller!.initialize();
-      if (!mounted) return;
-      setState(() => _isInitializing = false);
+      if (mounted) setState(() => _isInitializing = false);
     } catch (e) {
-      if (!mounted) return;
-      setState(() => _isInitializing = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Gagal inisialisasi kamera: $e')));
+      if (mounted) {
+        setState(() => _isInitializing = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error inisialisasi kamera: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _toggleFlash() async {
+    if (_controller == null || !_controller!.value.isInitialized) return;
+    try {
+      if (_controller!.value.flashMode == FlashMode.off) {
+        await _controller!.setFlashMode(FlashMode.torch);
+      } else {
+        await _controller!.setFlashMode(FlashMode.off);
+      }
+      setState(() => _isFlashOn = !_isFlashOn);
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Gagal mengubah mode flash')),
+      );
+    }
+  }
+
+  Future<void> _processAndSaveImage(XFile file) async {
+    try {
+      final bytes = await file.readAsBytes();
+      if (mounted) Navigator.of(context).pop<Uint8List>(bytes);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gagal memproses gambar: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _takePhoto() async {
+    if (_controller == null || !_controller!.value.isInitialized || _isTaking) return;
+    
+    setState(() => _isTaking = true);
+    try {
+      final XFile file = await _controller!.takePicture();
+      await _processAndSaveImage(file);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gagal mengambil foto: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isTaking = false);
+    }
+  }
+
+  Future<void> _switchCamera() async {
+    if (_cameras == null || _cameras!.length < 2) return;
+    
+    try {
+      final current = _controller!.description;
+      final idx = _cameras!.indexOf(current);
+      final next = _cameras![(idx + 1) % _cameras!.length];
+      
+      await _controller!.dispose();
+      _controller = CameraController(
+        next,
+        ResolutionPreset.high,
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.jpeg,
+      );
+      
+      setState(() => _isInitializing = true);
+      await _controller!.initialize();
+      if (mounted) setState(() => _isInitializing = false);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gagal mengganti kamera: $e')),
+        );
+      }
     }
   }
 
@@ -61,50 +160,23 @@ class _CameraScanScreenState extends State<CameraScanScreen> {
     super.dispose();
   }
 
-  // Captures a photo and returns the image bytes to the previous screen.
-  Future<void> _takePhoto() async {
-    if (_controller == null || !_controller!.value.isInitialized || _isTaking) return;
-    setState(() => _isTaking = true);
-    try {
-      final XFile file = await _controller!.takePicture();
-      final bytes = await file.readAsBytes();
-      if (!mounted) return;
-      // Pop the current screen and pass the image bytes back.
-      Navigator.of(context).pop<Uint8List>(bytes);
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Gagal ambil foto: $e')));
-    } finally {
-      if (mounted) setState(() => _isTaking = false);
-    }
-  }
-
-  // Switches between available cameras (front/back).
-  Future<void> _switchCamera() async {
-    if (_cameras == null || _cameras!.length < 2) return;
-    try {
-      final current = _controller!.description;
-      final idx = _cameras!.indexOf(current);
-      final next = _cameras![(idx + 1) % _cameras!.length];
-      await _controller!.dispose();
-      _controller = CameraController(next, ResolutionPreset.high, enableAudio: false);
-      setState(() => _isInitializing = true);
-      await _controller!.initialize();
-      if (mounted) setState(() => _isInitializing = false);
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Gagal ganti kamera: $e')));
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Scan - Kamera'),
+        title: const Text('Scan Dokumen'),
         actions: [
+          // Toggle flash button
+          IconButton(
+            icon: Icon(_isFlashOn ? Icons.flash_on : Icons.flash_off),
+            onPressed: _toggleFlash,
+            tooltip: 'Toggle Flash',
+          ),
+          // Toggle guide lines button
           IconButton(
             icon: Icon(_showGuides ? Icons.grid_on : Icons.grid_off),
             onPressed: () => setState(() => _showGuides = !_showGuides),
-            tooltip: _showGuides ? 'Sembunyikan garis bantu' : 'Tampilkan garis bantu',
+            tooltip: _showGuides ? 'Sembunyikan Panduan' : 'Tampilkan Panduan',
           ),
         ],
       ),
@@ -112,122 +184,81 @@ class _CameraScanScreenState extends State<CameraScanScreen> {
           ? const Center(child: CircularProgressIndicator())
           : Stack(
               children: [
-                // Camera preview fills the entire screen
-                Positioned.fill(
-                  child: _controller != null && _controller!.value.isInitialized
-                      ? CameraPreview(_controller!)
-                      : const Center(child: Text('Tidak ada preview kamera')),
-                ),
+                // Camera preview
+                if (_controller != null && _controller!.value.isInitialized)
+                  Positioned.fill(
+                    child: AspectRatio(
+                      aspectRatio: _controller!.value.aspectRatio,
+                      child: CameraPreview(_controller!),
+                    ),
+                  ),
 
-                // Overlay painter for the frame and guides
-                Positioned.fill(
-                  child: LayoutBuilder(builder: (context, constraints) {
-                    const double frameAspectRatio = 0.707; // A4-like aspect ratio
-                    return CustomPaint(
+                // Document frame overlay
+                if (_showGuides)
+                  Positioned.fill(
+                    child: CustomPaint(
                       painter: _OverlayPainter(
-                        frameAspectRatio: frameAspectRatio,
-                        scale: _frameScale.clamp(0.4, 0.98),
+                        frameAspectRatio: 0.707,
+                        scale: _frameScale,
                         showGuides: _showGuides,
                         borderColor: Colors.white.withOpacity(0.95),
                         shadeColor: Colors.black.withOpacity(0.45),
                         cornerColor: Colors.lightBlueAccent,
                       ),
-                      size: Size(constraints.maxWidth, constraints.maxHeight),
-                    );
-                  }),
-                ),
+                    ),
+                  ),
 
-                // Top UI for info and frame size slider
+                // Bottom controls
                 Positioned(
-                  top: 12,
-                  left: 12,
-                  right: 12,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.center,
+                  left: 0,
+                  right: 0,
+                  bottom: 24,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: Colors.black54,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.photo_size_select_large, color: Colors.white, size: 18),
-                            const SizedBox(width: 8),
-                            Text('Bingkai dokumen', style: TextStyle(color: Colors.white.withOpacity(0.95))),
-                            const SizedBox(width: 10),
-                            Text('${(_frameScale * 100).round()}%', style: TextStyle(color: Colors.white70)),
-                          ],
-                        ),
+                      FloatingActionButton(
+                        heroTag: 'close',
+                        onPressed: () => Navigator.pop(context),
+                        backgroundColor: Colors.red,
+                        child: const Icon(Icons.close),
                       ),
-                      const SizedBox(height: 8),
-                      SizedBox(
-                        height: 36,
-                        child: SliderTheme(
-                          data: SliderTheme.of(context).copyWith(
-                            trackHeight: 2,
-                            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
-                            overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
-                          ),
-                          child: Slider(
-                            value: _frameScale,
-                            min: 0.5,
-                            max: 0.95,
-                            divisions: 9,
-                            activeColor: Colors.white,
-                            inactiveColor: Colors.white24,
-                            onChanged: (v) => setState(() => _frameScale = v),
-                          ),
-                        ),
+                      FloatingActionButton.large(
+                        heroTag: 'capture',
+                        onPressed: _isTaking ? null : _takePhoto,
+                        child: _isTaking
+                            ? const CircularProgressIndicator(color: Colors.white)
+                            : const Icon(Icons.camera_alt, size: 36),
+                      ),
+                      FloatingActionButton(
+                        heroTag: 'switch',
+                        onPressed: _switchCamera,
+                        child: const Icon(Icons.flip_camera_ios),
                       ),
                     ],
                   ),
                 ),
 
-                // Bottom controls (close, capture, switch camera)
+                // Frame size indicator
                 Positioned(
-                  bottom: 24,
+                  top: 16,
                   left: 0,
                   right: 0,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                  child: Column(
                     children: [
-                      FloatingActionButton(
-                        onPressed: _isTaking ? null : () => Navigator.of(context).pop(),
-                        backgroundColor: Colors.grey.shade700,
-                        child: const Icon(Icons.close),
-                        heroTag: 'close_camera',
-                      ),
-                      const SizedBox(width: 24),
-                      GestureDetector(
-                        onTap: _takePhoto,
-                        child: Container(
-                          width: 72,
-                          height: 72,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white, width: 6),
-                            color: _isTaking ? Colors.white54 : Colors.white,
-                          ),
-                          child: Center(
-                            child: _isTaking
-                                ? const SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(strokeWidth: 2),
-                                  )
-                                : const Icon(Icons.camera_alt, color: Colors.black),
-                          ),
+                      Text(
+                        'Ukuran Frame: ${(_frameScale * 100).round()}%',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
-                      const SizedBox(width: 24),
-                      FloatingActionButton(
-                        onPressed: _controller != null && _controller!.value.isInitialized ? _switchCamera : null,
-                        child: const Icon(Icons.flip_camera_android),
-                        heroTag: 'flip_camera',
+                      Slider(
+                        value: _frameScale,
+                        min: 0.5,
+                        max: 0.95,
+                        divisions: 9,
+                        onChanged: (v) => setState(() => _frameScale = v),
                       ),
                     ],
                   ),
@@ -238,11 +269,9 @@ class _CameraScanScreenState extends State<CameraScanScreen> {
   }
 }
 
-/// Custom painter that draws a dark mask, a precise centered frame with
-/// rounded corners, corner brackets, and an optional rule-of-thirds grid.
 class _OverlayPainter extends CustomPainter {
-  final double frameAspectRatio; // width / height
-  final double scale; // 0.0..1.0 of available shorter side
+  final double frameAspectRatio;
+  final double scale;
   final bool showGuides;
   final Color borderColor;
   final Color shadeColor;
@@ -259,12 +288,11 @@ class _OverlayPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // Determine the framed document's size
-    final double shorterSide = min(size.width, size.height);
+    // Gunakan math.min untuk mengakses fungsi min
+    final double shorterSide = math.min(size.width, size.height);
     final double frameWidth = shorterSide * scale;
     final double frameHeight = frameWidth / frameAspectRatio;
     
-    // adjust if it overflows the screen on either axis
     Rect frameRect;
     if (frameHeight > size.height) {
       final newHeight = size.height * scale;
@@ -280,58 +308,51 @@ class _OverlayPainter extends CustomPainter {
           height: frameHeight.clamp(100, size.height));
     }
 
-    // Main overlay - draw the dark semi-transparent mask
     final outer = Path()..addRect(Rect.fromLTWH(0, 0, size.width, size.height));
     final hole = Path()..addRRect(RRect.fromRectAndRadius(frameRect, const Radius.circular(8)));
     final path = Path.combine(PathOperation.difference, outer, hole);
     final shadePaint = Paint()..color = shadeColor..style = PaintingStyle.fill;
     canvas.drawPath(path, shadePaint);
 
-    // Border
     final borderPaint = Paint()..color = borderColor..style = PaintingStyle.stroke..strokeWidth = 2.2;
     canvas.drawRRect(RRect.fromRectAndRadius(frameRect, const Radius.circular(8)), borderPaint);
 
-    // Corner brackets
     final cornerPaint = Paint()..color = cornerColor..strokeWidth = 4..strokeCap = StrokeCap.round;
-    final double bracketLen = min(frameRect.width, frameRect.height) * 0.08;
+    // Gunakan math.min untuk corner brackets
+    final double bracketLen = math.min(frameRect.width, frameRect.height) * 0.08;
 
-    // Top-left
+    // Corner brackets
     canvas.drawLine(frameRect.topLeft, frameRect.topLeft.translate(bracketLen, 0), cornerPaint);
     canvas.drawLine(frameRect.topLeft, frameRect.topLeft.translate(0, bracketLen), cornerPaint);
 
-    // Top-right
     canvas.drawLine(frameRect.topRight, frameRect.topRight.translate(-bracketLen, 0), cornerPaint);
     canvas.drawLine(frameRect.topRight, frameRect.topRight.translate(0, bracketLen), cornerPaint);
 
-    // Bottom-left
     canvas.drawLine(frameRect.bottomLeft, frameRect.bottomLeft.translate(bracketLen, 0), cornerPaint);
     canvas.drawLine(frameRect.bottomLeft, frameRect.bottomLeft.translate(0, -bracketLen), cornerPaint);
 
-    // Bottom-right
     canvas.drawLine(frameRect.bottomRight, frameRect.bottomRight.translate(-bracketLen, 0), cornerPaint);
     canvas.drawLine(frameRect.bottomRight, frameRect.bottomRight.translate(0, -bracketLen), cornerPaint);
     
-    // rule-of-thirds grid and center guide
     if (showGuides) {
       final guidePaint = Paint()
         ..color = Colors.white.withOpacity(0.6)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.0;
 
-      // vertical thirds
       for (int i = 1; i <= 2; i++) {
         final dxv = frameRect.left + frameRect.width * (i / 3);
         canvas.drawLine(Offset(dxv, frameRect.top + 6), Offset(dxv, frameRect.bottom - 6), guidePaint);
       }
-      // horizontal thirds
+
       for (int i = 1; i <= 2; i++) {
         final dyh = frameRect.top + frameRect.height * (i / 3);
         canvas.drawLine(Offset(frameRect.left + 6, dyh), Offset(frameRect.right - 6, dyh), guidePaint);
       }
 
-      // subtle center crosshair
       final center = frameRect.center;
-      final crossLen = (frameWidth < frameHeight ? frameWidth : frameHeight) * 0.03;
+      // Gunakan math.min untuk crosshair
+      final crossLen = (math.min(frameWidth, frameHeight)) * 0.03;
       final crossPaint = Paint()
         ..color = Colors.white.withOpacity(0.9)
         ..strokeWidth = 1.6

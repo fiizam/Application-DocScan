@@ -1,11 +1,152 @@
 // history_screen.dart
 
+// ignore_for_file: unused_import
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:async'; // Diperlukan untuk Timer
 import 'dart:convert';
+import 'dart:typed_data';
+
 import 'scan_document_screen.dart'; // Pastikan DocumentModel diimpor
 
-// Enum untuk menentukan jenis histori yang akan ditampilkan
+// ================= WIDGET NOTIFIKASI KUSTOM (BARU) =================
+// Kelas ini bertugas untuk menampilkan dan menganimasikan notifikasi.
+class CustomNotificationWidget extends StatefulWidget {
+  final String message;
+  final Color backgroundColor;
+  final IconData iconData;
+  final VoidCallback onDismiss;
+
+  const CustomNotificationWidget({
+    super.key,
+    required this.message,
+    required this.backgroundColor,
+    required this.iconData,
+    required this.onDismiss,
+  });
+
+  @override
+  State<CustomNotificationWidget> createState() => _CustomNotificationWidgetState();
+}
+
+class _CustomNotificationWidgetState extends State<CustomNotificationWidget> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<Offset> _offsetAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      duration: const Duration(milliseconds: 300),
+      vsync: this,
+    );
+
+    _offsetAnimation = Tween<Offset>(
+      begin: const Offset(0, -1.5), // Mulai dari atas layar
+      end: Offset.zero, // Berakhir di posisi normal
+    ).animate(CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeOut,
+    ));
+
+    // Mulai animasi masuk
+    _controller.forward();
+
+    // Atur timer untuk menutup notifikasi secara otomatis
+    Timer(const Duration(seconds: 2), () {
+      if (mounted) {
+        _controller.reverse().then((_) => widget.onDismiss());
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // SafeArea memastikan notifikasi tidak tertutup oleh status bar sistem (jam, baterai, dll)
+    return SafeArea(
+      child: SlideTransition(
+        position: _offsetAnimation,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+          decoration: BoxDecoration(
+            color: widget.backgroundColor,
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Icon(widget.iconData, color: Colors.white),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  widget.message,
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ================= MANAGER NOTIFIKASI (BARU) =================
+// Kelas helper untuk mempermudah menampilkan notifikasi dari mana saja.
+class TopNotificationManager {
+  static OverlayEntry? _overlayEntry;
+
+  static void show(BuildContext context, String message, {bool isError = false}) {
+    // Hapus notifikasi lama jika ada
+    if (_overlayEntry != null) {
+      _overlayEntry?.remove();
+      _overlayEntry = null;
+    }
+
+    final Color backgroundColor = isError ? Colors.red.shade600 : Colors.green.shade500;
+    final IconData icon = isError ? Icons.error_outline : Icons.check_circle_outline;
+
+    _overlayEntry = OverlayEntry(
+      builder: (context) => Positioned(
+        top: 0,
+        left: 0,
+        right: 0,
+        child: Material(
+          color: Colors.transparent,
+          child: CustomNotificationWidget(
+            message: message,
+            backgroundColor: backgroundColor,
+            iconData: icon,
+            onDismiss: () {
+              if (_overlayEntry != null) {
+                _overlayEntry?.remove();
+                _overlayEntry = null;
+              }
+            },
+          ),
+        ),
+      ),
+    );
+
+    Overlay.of(context).insert(_overlayEntry!);
+  }
+}
+
 enum HistoryType { deleted, downloaded }
 
 class HistoryScreen extends StatefulWidget {
@@ -61,11 +202,17 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
   }
 
+  // Fungsi untuk menampilkan notifikasi kustom
+  void _showNotification(String message, {bool isError = false}) {
+    if (!mounted) return;
+    TopNotificationManager.show(context, message, isError: isError);
+  }
+
   // Logika untuk memulihkan dokumen
   Future<void> _restoreDocument(int index) async {
     final docToRestore = _documents[index];
     
-    // Panggil callback onRestore yang dioper dari ProfileScreen -> ScanDocumentScreen
+    // Panggil callback onRestore
     widget.onRestore(docToRestore);
 
     // Hapus dari daftar lokal
@@ -78,11 +225,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final docsString = _documents.map((doc) => jsonEncode(doc.toJson())).toList();
     await prefs.setStringList(_storageKey, docsString);
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Dokumen berhasil dipulihkan!')),
-      );
-    }
+    // HAPUS pemanggilan notifikasi dari sini,
+    // biarkan notifikasi dipicu oleh `onRestore` di ScanDocumentScreen.
   }
 
   // Logika untuk menghapus permanen
@@ -98,9 +242,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
     await prefs.setStringList(_storageKey, docsString);
     
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Dokumen berhasil dihapus permanen!')),
-      );
+      _showNotification('Dokumen dihapus permanen!', isError: true);
     }
   }
 

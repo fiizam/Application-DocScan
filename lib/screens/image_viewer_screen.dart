@@ -1,5 +1,7 @@
 // image_viewer_screen.dart
 
+// ignore_for_file: unused_import
+
 import 'dart:typed_data';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -11,7 +13,6 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import '../text_display_screen.dart';
-// ignore: unused_import
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 

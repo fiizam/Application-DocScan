@@ -25,7 +25,6 @@ dependencies:
   device_info_plus: ^11.5.0
   google_mlkit_text_recognition: ^0.15.0
   google_fonts: ^6.3.1
-  # document_scanner_flutter: ^0.2.7
 
 
 dev_dependencies:
